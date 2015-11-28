@@ -1,0 +1,206 @@
+---
+title: "RepData_PeerAssesment2"
+author: "Valerio Vaccaro"
+date: "21 September 2015"
+output:
+  html_document:
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+---
+# Severe weather events in the United States: analisys on public health and the economy impacts.
+
+This work address the analisys of sever weather events consequences (fatalities, injuries, and property damage) on public healt and economic problems based on events recorded in the the U.S. National Oceanic and Atmospheric Administration’s (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage from 1950 to November 2011.
+
+We want answer to the following questions:
+
+* Across the United States, which types of events are most harmfull with resprect to population health?
+* Across the United States, which types of events have the greatest economic consequences?
+
+As we will see in this document the Tornadoes on public healt and Floods, respect to ecomomical impacts, are the most critical weather events.
+
+## Dowload dataset
+
+The dataset is located at [this address](http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2)  and tracks characteristics of major storms and weather events in the United States from 1950 to November 2011.
+
+```{r load_data, results=FALSE, warning=FALSE, comment=FALSE,}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+
+# Download the file if it's not directly available
+if (!file.exists("./StormData.csv.bz2")) {
+    download.file("http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile = "./StormData.csv.bz2") } 
+
+# Import zipped csv file in R
+StormData <- read.csv("./StormData.csv.bz2")
+#, nrow=200000
+```
+
+The complete dataset contains 902297 observations with 37 columns each one.
+
+```{r print_summary}
+str(StormData)
+```
+
+## Data Processing
+
+In the first step we will select only the columns useful for this analisys:
+
+- EVTYPE, event type
+- FATALITIES, number of deaths
+- INJURES, number of injures 
+- PROPDMG, values of property damages in dollars
+- PROPDMGEXP, exponent of PROPDMG
+- CROPDMG, values of crop damages in dollars
+- CROPDMGEXP, exponent for CROPDMG
+ 
+```{r filter_columns}
+StormData <- StormData[, c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP") ]
+```
+
+This dataset contains 902297 observations but actually there are only 7 columns.
+
+The damages amount is reported in dollars and splitted in two different columns, value and exponent
+Kind of content in the exponent columns are:
+
+* NA (no exponent) has to be translate as 0 exponent (10^0=1)
+* \+ or - or ? has to be translate as 0 exponent (10^0=1)
+* h or H char means hundrends so exponent hast to be 2 (10^2=100)
+* k or K char (kilo) means thousands so exponent hast to be 3 (10^3=1000)
+* m or M char (mega) meand millions so exponent hast to be 6 (10^6=1000000)
+* b or B char meand billions so exponent hast to be 9 (10^9=1000000000)
+
+```{r clean_data}
+# Convert in char array
+StormData$PROPDMGEXP <- as.character(StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- as.character(StormData$CROPDMGEXP)
+# If NA exponent is 0
+StormData$PROPDMGEXP[is.na(StormData$PROPDMGEXP)] <- 0
+StormData$CROPDMGEXP[is.na(StormData$CROPDMGEXP)] <- 0
+# If -,+,? exponent is 0
+StormData$PROPDMGEXP <- gsub("\\-|\\+|\\?", "0", StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- gsub("\\-|\\+|\\?", "0", StormData$CROPDMGEXP)
+# If H exponent is 2
+StormData$PROPDMGEXP <- gsub("h|H", "2", StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- gsub("h|H", "2", StormData$CROPDMGEXP)
+# If K exponent is 3
+StormData$PROPDMGEXP <- gsub("k|K", "3", StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- gsub("k|K", "3", StormData$CROPDMGEXP)
+# If M exponent is 6
+StormData$PROPDMGEXP <- gsub("m|M", "6", StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- gsub("m|M", "6", StormData$CROPDMGEXP)
+# If B exponent is 9
+StormData$PROPDMGEXP <- gsub("b|B", "9", StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- gsub("b|B", "9", StormData$CROPDMGEXP)
+# convert as numeric
+StormData$PROPDMGEXP <- as.numeric(StormData$PROPDMGEXP)
+StormData$CROPDMGEXP <- as.numeric(StormData$CROPDMGEXP)
+# If NA exponent is 0
+StormData$PROPDMGEXP[is.na(StormData$PROPDMGEXP)] <- 0
+StormData$CROPDMGEXP[is.na(StormData$CROPDMGEXP)] <- 0
+```
+
+With numerical exponent we can recalculate damages for properties and crop fields. The variable total damages contain the sum of both damages.
+
+```{r calculate_damages}
+#calc damages
+StormDataCorrected <- mutate(StormData, PROPERTY_DAMAGE = PROPDMG * 10^PROPDMGEXP, CROPS_DAMAGE = CROPDMG * 10^CROPDMGEXP, TOTAL_DAMAGE = PROPERTY_DAMAGE +  CROPS_DAMAGE)
+```
+
+We can summarize the complete dataset by event type and calculates:
+
+* total fatalities for each event type 
+* total injuries for each event type
+* total property damages for each event type
+* total crop damages for each event type.
+
+```{r create_summaries}
+# summary by EVTYPE
+event_summary <- group_by(StormDataCorrected, EVTYPE)
+# calculate summaries
+StormSummary <- summarize(event_summary, 
+        total_fatalities = sum(FATALITIES, na.rm = TRUE),
+        total_injuries = sum(INJURIES, na.rm = TRUE),
+        total_propdmg = sum(PROPERTY_DAMAGE, na.rm = TRUE),
+        total_cropdmg = sum(CROPS_DAMAGE, na.rm = TRUE),
+        total_damages = sum (TOTAL_DAMAGE, na.rm = TRUE)     )
+# print structure 
+str(StormSummary)
+```
+
+## Results
+Now we can finally anwer to questions about consequences of several weather events based on summarized datasets.
+
+### Across the United States, which types of events are most harmful with respect to population health?
+We can order the dataset regardings fatalities and injuries and plot the first 10 values.
+
+```{r plot_images_health}
+# Order by fatalities
+StormSummary_order_total_fatalities <- StormSummary[order(StormSummary$total_fatalities, decreasing = T), ][1:10, ]
+# Plot fatalities 
+plot_fatalities <- ggplot(StormSummary_order_total_fatalities, aes(x=reorder(EVTYPE, -total_fatalities), y=total_fatalities, fill=total_fatalities)) + 
+        geom_bar(stat = "identity") + 
+        ylab("Fatalities") +
+        xlab("Event type") +
+        ggtitle ("Fatalities") +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+        theme(legend.position="none")
+
+# Order by injuries
+StormSummary_order_total_injuries <- StormSummary[order(StormSummary$total_injuries, decreasing = T), ][1:10, ]
+# Plot injuries 
+plot_injuries <- ggplot(StormSummary_order_total_injuries, aes(x=reorder(EVTYPE, -total_injuries), y=total_injuries, fill=total_injuries)) +
+        geom_bar(stat = "identity") + 
+        ylab("Injuries") +
+        xlab("Event type") +
+        ggtitle ("Injuries") +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+        theme(legend.position="none") 
+
+grid.arrange(plot_fatalities, plot_injuries, ncol=2)
+```
+
+The most harmful events for population healts are tornadoes that are responsible for a big number of fatalities and injuries, excessive heat and floods can cause a big number of fatalities also.
+
+### Across the United States, which types of events have the greatest economic consequences?
+We can order the dataset using properties and crop damages columns then print the first 10 values for each set.
+
+```{r plot_images_damages}
+# Order by property damages
+StormSummary_order_propdmg <- StormSummary[order(StormSummary$total_propdmg, decreasing = T), ][1:10, ]
+# Plot damages 
+plot_propdmg <- ggplot(StormSummary_order_propdmg, aes(x=reorder(EVTYPE, -total_propdmg), y=total_propdmg, fill=total_propdmg)) +
+        geom_bar(stat="identity") +
+        ggtitle("Property damage") +
+        xlab("Event type") + 
+        ylab("Damage ($)") +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+        theme(legend.position="none") 
+
+# Order by crop damages
+StormSummary_order_propdmg <- StormSummary[order(StormSummary$total_cropdmg, decreasing = T), ][1:10, ]
+# Plot damages 
+plot_cropdmg <- ggplot(StormSummary_order_propdmg, aes(x=reorder(EVTYPE, -total_cropdmg), y=total_cropdmg, fill=total_cropdmg)) +
+        geom_bar(stat="identity") +
+        ggtitle("Crop damage") +
+        xlab("Event type") + 
+        ylab("Damage ($)") +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+        theme(legend.position="none") 
+
+grid.arrange(plot_propdmg, plot_cropdmg, ncol = 2)
+
+```
+
+The biggest economic consequences for property damages are floods, hurricanes and tornadoes; on the other hand for crop damages droughts and floods are the most dangerouse weather events.
+
+```{r total_damages}
+# Order by total damages
+StormSummary_order_damages <- StormSummary[order(StormSummary$total_damages, decreasing = T), c("EVTYPE","total_damages") ][1:10, ]
+StormSummary_order_damages
+```
+
+If we sum property and crop damages we obtain total damages in witch the biggest economic consequences are made by the same events for property analisys (floods, hurricanes and tornadoes).
